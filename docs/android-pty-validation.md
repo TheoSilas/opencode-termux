@@ -82,3 +82,24 @@ API 29 下 `cargo check --locked --target aarch64-linux-android` 已通过，
 源码的真实测试另行通过 7/7，记录在
 `logs/stability/standard-pty-current-source-final.stdout.log`。
 只有实际运行且断言通过的测试计为通过；平台阻碍、跳过和待人工验收单独记录。
+
+## 2026-10-13 提交快照构建结果
+
+- 后端审查提交 `29675a6ff2fe30c8a9b250e0f2fd0502114769ea` 的 Fork
+  `check / typecheck` 成功；移动端提交 `183905b57ec01b0a0206f9abfd96fcb4de0813b5`
+  的 PR `validate` 成功（101 个 web E2E 通过）。
+- 从后端提交的独立 worktree 构建返回 0；最后一次依赖安装后替换的
+  `bun-pty` 内嵌库通过固定 SHA 校验。候选二进制 SHA-256：
+  `4b8bbd9bae09045977ede36e7ebc5d0db0f8b584df54f7386faf86c00f5be94d`；
+  sidecar SHA-256：`1c119d94771daf50742e403731294e5d5d7799073e9eda865c987468450c1aec`。
+  候选文件和完整日志仅保存在隔离目录
+  `$PREFIX/tmp/opencode-repro-2.0.12/artifacts/final-29675a/`、
+  `logs/stability/delivery-20261013.md`。
+- 构建脚本使用此前按版本缓存的 Web UI `dist`，目前不能独立证明它
+  来源于本次提交；源码 worktree 中除依赖安装修改的三份 package/lock
+  文件外没有其他跟踪文件变化。
+- 在独立 `XDG_*` 数据目录和临时 loopback 端口首次启动这份新产物，
+  `serve` 于监听前报 `Bad system call`（SIGSYS）。已有的
+  `openat2_shim.so` 仅作一次针对性诊断仍失败；未开始 HTTP/WebSocket
+  PTY 冒烟，没有最终可交付的运行产物。保留日志，不再无改动重试
+  此失败路径；正式 4096 服务不切换。
