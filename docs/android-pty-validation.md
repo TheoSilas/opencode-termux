@@ -115,3 +115,29 @@ HTTP 500，服务端日志为 `abortHandshake` 内 `TypeError`，实际输入/�
 `runtime/final-29675a/data/opencode/log/opencode.log`；不能宣称修复
 全部完成。构建脚本已改为从源码编译并校验相对路径的 runtime shim，
 正式服务保持不变。之前生成的候选文件没有这项 launcher 修复，仍不交付。
+
+## 2026-10-13 WebSocket 原因与重新构建约束
+
+隔离的同一 PTY 请求在后端 `29675a6ff` 的源码及编译候选上均返回
+WebSocket HTTP 500；旧的源码目录可以通过，但其后端源码不是该提交。
+完整堆栈分别保存在 `runtime/exact-source-29675a/data/opencode/log/opencode-local.log`
+和 `runtime/final-29675a/data/opencode/log/opencode.log`。在 Effect Node HTTP
+升级路径插桩，证实请求携带有效 WebSocket headers，且 `ws` 的
+`completeUpgrade()` 调用 Bun `server.upgrade()` 返回 false；随后
+`abortHandshake()` 因缺少 response 又抛 TypeError，这只是二次错误。
+根因是新加的 Location 中间件在升级前 `await fs.stat`，错过 Android Bun
+1.4.0 的同步升级窗口。后端 `a53d48db1` 将升级请求改为同步 `statSync`，
+非升级 HTTP 请求仍保持原来的异步校验；隔离源码同一请求已通过标准
+PTY WebSocket 输入输出，详见 `exact-source-ws-sync-precheck.*.log`。
+
+旧版按版本缓存的 Web UI `dist` 无法核实生成源码和过程，保留作证据，
+不能复用于最终候选。`build-bionic.sh` 的新 UI 缓存按版本及 Git 提交
+双重索引，`WEB_UI_FRESH=1` 必须在全新源码 worktree 中实际执行 Vite，
+只在有 `built in` 完成标记和 `dist/index.html` 时容许 Android Bun 的
+退出超时。构建记录包含 `web-ui-build.log`、`web-ui-source.sha` 和逐文件
+SHA-256。Android syscall shim 在构建期处理 install/openat2/fchmodat2，
+运行期还需处理禁用的 `close_range(436)`；仅 `CLOSE_RANGE_CLOEXEC` 模式
+由 `/proc/self/fd` 和 libc `fcntl` 处理，其余模式 `ENOSYS`，并在启动器
+中按相对路径核验 shim 校验和后 `LD_PRELOAD`。隔离 C 测试记录在
+`close-range-shim-targeted-29675a.stdout.log`。必须从最终提交重新构建、
+在隔离目录复测升级及重连后才能交付；正式 4096 服务保持不变。

@@ -27,8 +27,12 @@
 #ifndef SYS_close_range
 #define SYS_close_range 436
 #endif
-#define SYS_openat2    437
-#define SYS_fchmodat2  452
+#ifndef SYS_openat2
+#define SYS_openat2 437
+#endif
+#ifndef SYS_fchmodat2
+#define SYS_fchmodat2 452
+#endif
 #define CLOSE_RANGE_CLOEXEC 4
 
 struct my_open_how {
@@ -80,7 +84,7 @@ long syscall(long number, ...) {
     if (number == SYS_openat2) {
         int dirfd = va_arg(ap, int);
         const char *path = va_arg(ap, const char *);
-        const struct my_open_how *how = va_arg(ap, const struct open_how *);
+        const struct my_open_how *how = va_arg(ap, const struct my_open_how *);
         va_end(ap);
         /* Translate to libc openat(): its svc executes inside libc -> seccomp-ok.
          * open_how.resolve cannot be honored by plain openat; install paths are

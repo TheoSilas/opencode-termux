@@ -18,8 +18,8 @@ set -euo pipefail
 #      (idempotent; forces process.platform="linux" so the loader picks the
 #      bionic linux-arm64 libopentui.so).
 #   3. bundler compile         — bun script/build.ts --target=opencode-linux-arm64
-#      (android bun; openat2_shim LD_PRELOAD for install-only paths; no shim
-#      needed at runtime).
+#      (android bun; openat2_shim LD_PRELOAD for install/build, bundled in the
+#      launcher for runtime close_range(CLOEXEC) on Android).
 #   4. normalize               — copy dist output to contract names + write
 #      build.json (sha256 + provenance).
 #
@@ -38,6 +38,7 @@ set -euo pipefail
 #   UPX                set to 1 to also produce the -upx variant
 #   UPX_OPTS           upx flags (default: --best)
 #   BIONIC_PTY_SOURCE  verified bun-pty 0.4.8 Bionic library (see docs/android-pty-validation.md)
+#   WEB_UI_FRESH       1 = build UI from this source, never use the version cache
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VER="${VER:-2.0.0}"
@@ -309,34 +310,56 @@ open(f, 'w').write(src)
 print("    app-assets.ts patched (skipBuild -> collect-only)")
 PY_PATCH
 fi
-DIST_CACHE="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/v2src/.app-dist-cache/$VER"
-# Three-state dist resolution (per-version cache survives clean-version, which
-# only removes v2src/opencode-$VER — the sibling .app-dist-cache is kept):
-if [[ ! -f "$APP_DIR/dist/index.html" && -f "$DIST_CACHE/index.html" ]]; then
+SOURCE_SHA="$(git -C "$SRC_DIR" rev-parse HEAD)"
+DIST_CACHE="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/v2src/.app-dist-cache/$VER/$SOURCE_SHA"
+mkdir -p "$OUT_DIR"
+if [[ "${WEB_UI_FRESH:-0}" == 1 ]]; then
+  # Use only with a fresh source checkout. A version-keyed cache cannot prove
+  # that its assets were generated from this exact source commit.
+  [[ ! -e "$APP_DIR/dist" ]] || { echo "Error: WEB_UI_FRESH requires an empty app dist: $APP_DIR/dist" >&2; exit 1; }
+elif [[ -f "$APP_DIR/dist/index.html" && ! -f "$APP_DIR/dist-source.sha" ]]; then
+  echo "Error: app dist has no source provenance; use a fresh checkout with WEB_UI_FRESH=1" >&2; exit 1
+fi
+# Cache is keyed by version AND source commit. The legacy version-only cache
+# has no provenance and stays untouched as diagnostic evidence.
+if [[ "${WEB_UI_FRESH:-0}" != 1 && ! -f "$APP_DIR/dist/index.html" && -f "$DIST_CACHE/index.html" &&
+  "$(cat "$DIST_CACHE/source.sha" 2>/dev/null || true)" == "$SOURCE_SHA" ]]; then
   echo "==> web-ui: restoring dist from per-version cache ($DIST_CACHE)"
   mkdir -p "$APP_DIR/dist"
   cp -a "$DIST_CACHE/." "$APP_DIR/dist/"
+  printf '%s\n' "$SOURCE_SHA" > "$APP_DIR/dist-source.sha"
 fi
 if [[ ! -f "$APP_DIR/dist/index.html" ]]; then
   echo "==> web-ui: pre-building packages/app dist (vite)"
-  # bionic-node quirk: vite prints "built in Xs" then HANGS (zero io, no socket)
-  # — kill at 240s and let the artifact gate (below) be the pass/fail judge.
+  # Android Bun sometimes hangs after Vite reports completion; accept that
+  # timeout only with Vite's completed-build marker and a fresh index.html.
   # Android has no /usr/bin/env. Do not execute packages/app/node_modules/.bin/vite:
   # its generated launcher uses `#!/usr/bin/env node`. Resolve Vite's actual JS
   # entry and invoke it directly with the pinned Android Bun instead.
-  VITE_ENTRY="$(find "$SRC_DIR/node_modules/.bun" "$APP_DIR/node_modules" \
-    -path '*/vite/bin/vite.js' -type f 2>/dev/null | head -n1 || true)"
-  [[ -n "$VITE_ENTRY" ]] || { echo "Error: Vite JS entry not found under node_modules" >&2; exit 1; }
-  if ! timeout 240 bash -c 'cd "$1" && OPENCODE_CHANNEL=latest VITE_OPENCODE_SERVER_MODE=origin "$3" "$4" build' _ "$APP_DIR" "$ANDROID_BUN" "$ANDROID_BUN" "$VITE_ENTRY"; then
-    echo "    WARN: vite non-zero or timeout-killed (known bionic hang); judging by artifacts..."
+  VITE_ENTRY="$APP_DIR/node_modules/vite/bin/vite.js"
+  [[ -f "$VITE_ENTRY" ]] || { echo "Error: pinned app Vite JS entry not found: $VITE_ENTRY" >&2; exit 1; }
+  vite_status=0
+  timeout 240 bash -c 'cd "$1" && OPENCODE_CHANNEL=latest VITE_OPENCODE_SERVER_MODE=origin "$2" "$3" build' _ "$APP_DIR" "$ANDROID_BUN" "$VITE_ENTRY" > "$OUT_DIR/web-ui-build.log" 2>&1 || vite_status=$?
+  if [[ "$vite_status" -ne 0 ]]; then
+    [[ "$vite_status" -eq 124 && -f "$APP_DIR/dist/index.html" ]] && grep -q 'built in ' "$OUT_DIR/web-ui-build.log" || {
+      echo "Error: Vite build failed (exit $vite_status); see $OUT_DIR/web-ui-build.log" >&2; exit 1;
+    }
+    echo "    Vite completed assets but Android Bun did not exit (timeout 124)"
   fi
   [[ -f "$APP_DIR/dist/index.html" ]] || { echo "Error: web-ui dist pre-build produced no dist/index.html" >&2; exit 1; }
+  printf '%s\n' "$SOURCE_SHA" > "$APP_DIR/dist-source.sha"
   mkdir -p "$DIST_CACHE"
   cp -a "$APP_DIR/dist/." "$DIST_CACHE/"
+  printf '%s\n' "$SOURCE_SHA" > "$DIST_CACHE/source.sha"
   echo "    dist ready: $(du -sh "$APP_DIR/dist" | cut -f1); cached -> $DIST_CACHE"
 else
+  [[ "$(cat "$APP_DIR/dist-source.sha" 2>/dev/null || true)" == "$SOURCE_SHA" ]] || {
+    echo "Error: app dist source commit differs from $SOURCE_SHA" >&2; exit 1;
+  }
   echo "==> web-ui: dist ready ($(du -sh "$APP_DIR/dist" | cut -f1)), skip vite"
 fi
+printf '%s\n' "$SOURCE_SHA" > "$OUT_DIR/web-ui-source.sha"
+find "$APP_DIR/dist" -type f -print0 | sort -z | xargs -0 sha256sum > "$OUT_DIR/web-ui-files.sha256"
 
 echo "==> compiling (android bun, target=opencode-linux-arm64)"
 PTY_LIB="$(V2_SRC="$SRC_DIR" ANDROID_BUN="$ANDROID_BUN" bash "$ROOT_DIR/scripts/select-bionic-pty.sh")"
