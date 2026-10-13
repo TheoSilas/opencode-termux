@@ -158,3 +158,8 @@ HTTP 400。记录于 `final-a53-isolated-smoke.*` 和
 通过；真实提供商账号/真机操作及 fake-server 人工代码验收仍未完成，
 正式服务与数据库保持原状。完整交付状态见隔离复现目录的
 `logs/stability/delivery-20261013.md`。
+
+再以同一二进制（未重新构建）完成 `final-a53-stored-credentials.*` 隔离
+运行：通过 integration API 创建两条实际存入隔离数据库的离线测试密钥
+凭据，各自绑定不同会话，并验证按会话更新及全局凭据激活时互不覆盖。
+这些测试密钥未发起真实模型请求；真实账号 prompt/真机验收仍待完成。
