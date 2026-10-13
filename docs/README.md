@@ -14,6 +14,7 @@ This directory is the single source of truth for the current Termux packing/runt
 - `local-production.md` — local final packaging policy and boundaries
 - `transplant.md` — native-android transplant pipeline (revived: dual-format revive + TUI + alpha channel)
 - `migration-v1-to-v2.md` — v1 → v2 升级/回退/包名/构建线迁移指南
+- `android-pty-validation.md` — 固定 Bionic PTY 测试/内嵌库、独立数据目录复测与验证记录
 - `dual-track-install.md` — opencode provider selection (native mainline `opencode` vs appendix `opencode-wrapper`, full TUI)；包名时代分界（哪个 Push tag 的 `opencode` 资产属于哪个家族）→ [`dual-track-install.md#push-tag--包名家族分界`](./dual-track-install.md#push-tag--包名家族分界)
 - `plugin-management.md` — plugin install/update/rollback commands
 - `make-maintainer.md` — maintainer build/upload/cache operations (Make system doctrine, `tools/maintain.sh`, fleet push, cache cleanup)

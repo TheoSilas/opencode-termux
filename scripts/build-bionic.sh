@@ -37,6 +37,7 @@ set -euo pipefail
 #   BUILD_ROOT         output root (default: artifacts/build)
 #   UPX                set to 1 to also produce the -upx variant
 #   UPX_OPTS           upx flags (default: --best)
+#   BIONIC_PTY_SOURCE  verified bun-pty 0.4.8 Bionic library (see docs/android-pty-validation.md)
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VER="${VER:-2.0.0}"
@@ -320,7 +321,13 @@ if [[ ! -f "$APP_DIR/dist/index.html" ]]; then
   echo "==> web-ui: pre-building packages/app dist (vite)"
   # bionic-node quirk: vite prints "built in Xs" then HANGS (zero io, no socket)
   # — kill at 240s and let the artifact gate (below) be the pass/fail judge.
-  if ! timeout 240 bash -c 'cd "$1" && OPENCODE_CHANNEL=latest VITE_OPENCODE_SERVER_MODE=origin "$2" run build' _ "$APP_DIR" "$ANDROID_BUN"; then
+  # Android has no /usr/bin/env. Do not execute packages/app/node_modules/.bin/vite:
+  # its generated launcher uses `#!/usr/bin/env node`. Resolve Vite's actual JS
+  # entry and invoke it directly with the pinned Android Bun instead.
+  VITE_ENTRY="$(find "$SRC_DIR/node_modules/.bun" "$APP_DIR/node_modules" \
+    -path '*/vite/bin/vite.js' -type f 2>/dev/null | head -n1 || true)"
+  [[ -n "$VITE_ENTRY" ]] || { echo "Error: Vite JS entry not found under node_modules" >&2; exit 1; }
+  if ! timeout 240 bash -c 'cd "$1" && OPENCODE_CHANNEL=latest VITE_OPENCODE_SERVER_MODE=origin "$3" "$4" build' _ "$APP_DIR" "$ANDROID_BUN" "$ANDROID_BUN" "$VITE_ENTRY"; then
     echo "    WARN: vite non-zero or timeout-killed (known bionic hang); judging by artifacts..."
   fi
   [[ -f "$APP_DIR/dist/index.html" ]] || { echo "Error: web-ui dist pre-build produced no dist/index.html" >&2; exit 1; }
@@ -332,7 +339,9 @@ else
 fi
 
 echo "==> compiling (android bun, target=opencode-linux-arm64)"
-LD_PRELOAD="$OPENAT2_SHIM" OPENCODE_VERSION="$OPENCODE_VERSION" \
+PTY_LIB="$(V2_SRC="$SRC_DIR" ANDROID_BUN="$ANDROID_BUN" bash "$ROOT_DIR/scripts/select-bionic-pty.sh")"
+echo "    bionic PTY library: $PTY_LIB"
+LD_PRELOAD="$OPENAT2_SHIM" BUN_PTY_LIB="$PTY_LIB" OPENCODE_VERSION="$OPENCODE_VERSION" \
   "$ANDROID_BUN" script/build.ts --target=opencode-linux-arm64 --skip-install --skip-web-ui
 DIST_BIN="$SRC_DIR/packages/cli/dist/cli-linux-arm64/bin/opencode"
 [[ -x "$DIST_BIN" ]] || { echo "Error: build output missing: $DIST_BIN" >&2; exit 1; }
@@ -340,7 +349,22 @@ DIST_BIN="$SRC_DIR/packages/cli/dist/cli-linux-arm64/bin/opencode"
 # ── 4. normalize to packaging contract names ───────────────────────────
 mkdir -p "$OUT_DIR"
 mv -f "$DIST_BIN" "$OUT_DIR/opencode-native-revived"
+cp -p "$PTY_LIB" "$OUT_DIR/librust_pty_arm64_bionic.so"
 sha256sum "$OUT_DIR/opencode-native-revived" | awk '{print $1}' > "$OUT_DIR/build.sha256"
+sha256sum "$OUT_DIR/librust_pty_arm64_bionic.so" | awk '{print $1}' > "$OUT_DIR/pty.sha256"
+cat > "$OUT_DIR/run-opencode.sh" <<'LAUNCHER'
+#!/data/data/com.termux/files/usr/bin/bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+LIB="$ROOT/librust_pty_arm64_bionic.so"
+[[ -f "$LIB" && -f "$ROOT/pty.sha256" ]] || { echo 'Bionic PTY sidecar missing' >&2; exit 1; }
+[[ "$(sha256sum "$LIB" | cut -d' ' -f1)" == "$(cat "$ROOT/pty.sha256")" ]] || {
+  echo 'Bionic PTY sidecar checksum mismatch' >&2; exit 1;
+}
+export BUN_PTY_LIB="$LIB"
+exec "$ROOT/opencode-native-revived" "$@"
+LAUNCHER
+chmod 755 "$OUT_DIR/run-opencode.sh"
 echo "==> normalized: $OUT_DIR/opencode-native-revived ($(stat -c%s "$OUT_DIR/opencode-native-revived") B)"
 echo "    sha256: $(cat "$OUT_DIR/build.sha256")"
 
@@ -373,7 +397,7 @@ rec = {
   "android_bun": bun,
   "note": "compiled on android bun (bionic); TUI via grafted bionic libopentui.so; headless-channel reserve (A+/A-line) documented separately",
 }
-for name in ("opencode-native-revived", "opencode-native-revived-upx"):
+for name in ("opencode-native-revived", "opencode-native-revived-upx", "librust_pty_arm64_bionic.so"):
     p = os.path.join(out_dir, name)
     if os.path.isfile(p):
         rec[name] = {
