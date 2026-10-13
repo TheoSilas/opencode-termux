@@ -141,3 +141,20 @@ SHA-256。Android syscall shim 在构建期处理 install/openat2/fchmodat2，
 中按相对路径核验 shim 校验和后 `LD_PRELOAD`。隔离 C 测试记录在
 `close-range-shim-targeted-29675a.stdout.log`。必须从最终提交重新构建、
 在隔离目录复测升级及重连后才能交付；正式 4096 服务保持不变。
+
+最终后端 `a53d48db1c15e9d93e37a6574c655cd3c6443dd4` 的云端
+`check / typecheck` 成功（run `38398340096`）。从该提交的新 worktree
+构建退出 0，`WEB_UI_FRESH=1` 生成 88M Web UI，记录见
+`artifacts/build-a53d48/2.0.12/web-ui-build.log`、
+`web-ui-source.sha`、`web-ui-files.sha256`（路径位于隔离复现目录）。
+新二进制、Bionic PTY 库、运行时 shim SHA-256 分别为
+`59a5740805138de6811ff1268d76659523772a9eb3bd7b1319715c56baed1b9f`、
+`1c119d94771daf50742e403731294e5d5d7799073e9eda865c987468450c1aec`、
+`5c666c3f3fb295082db6c2eff3685e81aa239e116526e503164fb670198b22f6`。
+从产物启动器在独立目录通过标准 PTY 创建、票据、WebSocket 输入输出、
+断开重连、删除；正常 form/permission 接口通过，缺失工作目录返回明确
+HTTP 400。记录于 `final-a53-isolated-smoke.*` 和
+`final-a53-contract-smoke.*`。两个会话的合成 `credentialID` 独立更新
+通过；真实提供商账号/真机操作及 fake-server 人工代码验收仍未完成，
+正式服务与数据库保持原状。完整交付状态见隔离复现目录的
+`logs/stability/delivery-20261013.md`。
