@@ -1,7 +1,8 @@
 /*
  * openat2_shim.c v2 — LD_PRELOAD shim for Termux:
- * bun's install/build path calls openat2(437) / fchmodat2(452) which Termux
- * seccomp blocks. Termux seccomp ALSO requires the svc instruction to be
+ * bun's install/build path calls openat2(437) / fchmodat2(452), and compiled
+ * binaries call close_range(436) with CLOEXEC; Termux seccomp blocks them.
+ * Termux seccomp ALSO requires the svc instruction to be
  * executed from libc's mapping (instruction-pointer check), so we must NOT
  * emit our own svc — instead translate to the plain openat(257)/fchmodat(268)
  * via the real libc wrappers (their svc runs inside libc -> allowed).
@@ -19,9 +20,16 @@
 #include <fcntl.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <dirent.h>
+#include <limits.h>
+#include <stdlib.h>
 
+#ifndef SYS_close_range
+#define SYS_close_range 436
+#endif
 #define SYS_openat2    437
 #define SYS_fchmodat2  452
+#define CLOSE_RANGE_CLOEXEC 4
 
 struct my_open_how {
     uint64_t flags;
@@ -36,6 +44,38 @@ static syscall_fn real_syscall_fn;
 long syscall(long number, ...) {
     va_list ap;
     va_start(ap, number);
+
+    if (number == SYS_close_range) {
+        unsigned int first = va_arg(ap, unsigned int);
+        unsigned int last = va_arg(ap, unsigned int);
+        unsigned int flags = va_arg(ap, unsigned int);
+        va_end(ap);
+        /* Bun marks inherited descriptors CLOEXEC on startup. Android's
+         * seccomp blocks close_range(436), including CLOEXEC-only requests.
+         * Implement precisely this mode; fail other modes instead of claiming
+         * to close descriptors or emulate CLOSE_RANGE_UNSHARE. */
+        if (first > last) { errno = EINVAL; return -1; }
+        if (flags != CLOSE_RANGE_CLOEXEC) { errno = ENOSYS; return -1; }
+        DIR *fds = opendir("/proc/self/fd");
+        if (!fds) return -1;
+        struct dirent *entry;
+        while ((entry = readdir(fds))) {
+            char *end;
+            unsigned long fd = strtoul(entry->d_name, &end, 10);
+            if (*entry->d_name == '\0' || *end != '\0' || fd > UINT_MAX || fd < first || fd > last)
+                continue;
+            int old = fcntl((int)fd, F_GETFD);
+            if (old < 0 && errno == EBADF) continue;
+            if (old < 0 || fcntl((int)fd, F_SETFD, old | FD_CLOEXEC) < 0) {
+                int error = errno;
+                closedir(fds);
+                errno = error;
+                return -1;
+            }
+        }
+        closedir(fds);
+        return 0;
+    }
 
     if (number == SYS_openat2) {
         int dirfd = va_arg(ap, int);

@@ -350,18 +350,26 @@ DIST_BIN="$SRC_DIR/packages/cli/dist/cli-linux-arm64/bin/opencode"
 mkdir -p "$OUT_DIR"
 mv -f "$DIST_BIN" "$OUT_DIR/opencode-native-revived"
 cp -p "$PTY_LIB" "$OUT_DIR/librust_pty_arm64_bionic.so"
+clang -shared -fPIC -O2 -o "$OUT_DIR/android-syscall-shim.so" "$ROOT_DIR/tools/transplant/toolchain/openat2_shim.c"
 sha256sum "$OUT_DIR/opencode-native-revived" | awk '{print $1}' > "$OUT_DIR/build.sha256"
 sha256sum "$OUT_DIR/librust_pty_arm64_bionic.so" | awk '{print $1}' > "$OUT_DIR/pty.sha256"
+sha256sum "$OUT_DIR/android-syscall-shim.so" | awk '{print $1}' > "$OUT_DIR/shim.sha256"
 cat > "$OUT_DIR/run-opencode.sh" <<'LAUNCHER'
 #!/data/data/com.termux/files/usr/bin/bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 LIB="$ROOT/librust_pty_arm64_bionic.so"
+SHIM="$ROOT/android-syscall-shim.so"
 [[ -f "$LIB" && -f "$ROOT/pty.sha256" ]] || { echo 'Bionic PTY sidecar missing' >&2; exit 1; }
 [[ "$(sha256sum "$LIB" | cut -d' ' -f1)" == "$(cat "$ROOT/pty.sha256")" ]] || {
   echo 'Bionic PTY sidecar checksum mismatch' >&2; exit 1;
 }
+[[ -f "$SHIM" && -f "$ROOT/shim.sha256" ]] || { echo 'Android syscall shim missing' >&2; exit 1; }
+[[ "$(sha256sum "$SHIM" | cut -d' ' -f1)" == "$(cat "$ROOT/shim.sha256")" ]] || {
+  echo 'Android syscall shim checksum mismatch' >&2; exit 1;
+}
 export BUN_PTY_LIB="$LIB"
+export LD_PRELOAD="$SHIM${LD_PRELOAD:+:$LD_PRELOAD}"
 exec "$ROOT/opencode-native-revived" "$@"
 LAUNCHER
 chmod 755 "$OUT_DIR/run-opencode.sh"
@@ -397,7 +405,7 @@ rec = {
   "android_bun": bun,
   "note": "compiled on android bun (bionic); TUI via grafted bionic libopentui.so; headless-channel reserve (A+/A-line) documented separately",
 }
-for name in ("opencode-native-revived", "opencode-native-revived-upx", "librust_pty_arm64_bionic.so"):
+for name in ("opencode-native-revived", "opencode-native-revived-upx", "librust_pty_arm64_bionic.so", "android-syscall-shim.so"):
     p = os.path.join(out_dir, name)
     if os.path.isfile(p):
         rec[name] = {

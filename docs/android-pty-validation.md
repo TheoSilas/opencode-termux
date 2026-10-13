@@ -103,3 +103,15 @@ API 29 下 `cargo check --locked --target aarch64-linux-android` 已通过，
   `openat2_shim.so` 仅作一次针对性诊断仍失败；未开始 HTTP/WebSocket
   PTY 冒烟，没有最终可交付的运行产物。保留日志，不再无改动重试
   此失败路径；正式 4096 服务不切换。
+
+Android `logcat` 对新产物的 SIGSYS 明确报告禁用的 syscall **436**
+(`close_range`)；原 shim 只处理 437/452，所以第一次重试无效。现在
+`openat2_shim.c` 仅针对实际出现的 `CLOSE_RANGE_CLOEXEC` 以
+`/proc/self/fd` + `fcntl(FD_CLOEXEC)` 替代；其他模式返回 `ENOSYS`，
+不假装已关闭文件描述符。候选二进制配合隔离编译的新 shim 已能启动，
+并完成标准 PTY 创建、列表、票据、删除，但票据 WebSocket 升级返回
+HTTP 500，服务端日志为 `abortHandshake` 内 `TypeError`，实际输入/输出
+未验证。相应记录位于 `final-bionic-close-range-ws-29675a.*.log` 和
+`runtime/final-29675a/data/opencode/log/opencode.log`；不能宣称修复
+全部完成。构建脚本已改为从源码编译并校验相对路径的 runtime shim，
+正式服务保持不变。之前生成的候选文件没有这项 launcher 修复，仍不交付。
